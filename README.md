@@ -1,3 +1,4 @@
+```
 NucBox-EVO-X2:~$ ./strix-smi 
 ======================================== Strix Halo Monitor ========================================
 GPU: AMD Radeon Graphics (gfx1151 - Strix Halo)
