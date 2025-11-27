@@ -1,0 +1,54 @@
+#!/bin/bash
+
+# Strix Halo GPU Monitor - Find hwmon path dynamically
+GPU_PATH="/sys/class/drm/card0/device"
+HWMON_PATH=$(ls -d ${GPU_PATH}/hwmon/hwmon* 2>/dev/null | head -1)
+
+if [ -z "$HWMON_PATH" ]; then
+    echo "Error: Could not find hwmon path"
+    exit 1
+fi
+
+# Read current SCLK (convert Hz to MHz)
+SCLK_HZ=$(cat ${HWMON_PATH}/freq1_input 2>/dev/null || echo "0")
+SCLK_MHZ=$((SCLK_HZ / 1000000))
+
+# Read MCLK from pp_dpm_mclk (get active state)
+MCLK=$(grep '\*' ${GPU_PATH}/pp_dpm_mclk | awk '{print $2}')
+
+# Read temperature (convert mC to C)
+TEMP_MC=$(cat ${HWMON_PATH}/temp1_input 2>/dev/null || echo "0")
+TEMP_C=$(echo "scale=1; ${TEMP_MC}/1000" | bc)
+
+# Read power (convert uW to W)
+POWER_UW=$(cat ${HWMON_PATH}/power1_average 2>/dev/null || echo "0")
+POWER_W=$(echo "scale=2; ${POWER_UW}/1000000" | bc)
+
+# Read GPU utilization
+GPU_BUSY=$(cat ${GPU_PATH}/gpu_busy_percent 2>/dev/null || echo "N/A")
+
+# Read VRAM usage
+VRAM_USED=$(cat ${GPU_PATH}/mem_info_vram_used 2>/dev/null || echo "0")
+VRAM_TOTAL=$(cat ${GPU_PATH}/mem_info_vram_total 2>/dev/null || echo "1")
+VRAM_PCT=$(echo "scale=0; (${VRAM_USED}*100)/${VRAM_TOTAL}" | bc)
+
+# Read performance level
+PERF_LEVEL=$(cat ${GPU_PATH}/power_dpm_force_performance_level 2>/dev/null)
+
+# Display
+echo "======================================== Strix Halo Monitor ========================================"
+echo "GPU: AMD Radeon Graphics (gfx1151 - Strix Halo)"
+echo "======================================================================================================="
+printf "%-10s %-12s %-10s %-10s %-10s %-10s %-10s\n" "Temp" "Power" "SCLK" "MCLK" "GPU%" "VRAM%" "Perf"
+printf "%-10s %-12s %-10s %-10s %-10s %-10s %-10s\n" "${TEMP_C}°C" "${POWER_W}W" "${SCLK_MHZ}MHz" "${MCLK}" "${GPU_BUSY}%" "${VRAM_PCT}%" "${PERF_LEVEL}"
+echo "======================================================================================================="
+
+# Show detailed SCLK/MCLK states if requested
+if [ "$1" = "-v" ] || [ "$1" = "--verbose" ]; then
+    echo ""
+    echo "SCLK States:"
+    cat ${GPU_PATH}/pp_dpm_sclk
+    echo ""
+    echo "MCLK States:"
+    cat ${GPU_PATH}/pp_dpm_mclk
+fi
