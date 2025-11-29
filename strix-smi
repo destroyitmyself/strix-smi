@@ -1,54 +1,84 @@
 #!/bin/bash
 
-# Strix Halo GPU Monitor - Find hwmon path dynamically
-GPU_PATH="/sys/class/drm/card0/device"
-HWMON_PATH=$(ls -d ${GPU_PATH}/hwmon/hwmon* 2>/dev/null | head -1)
+# Find the AMD GPU hwmon path dynamically
+HWMON_PATH=$(find /sys/class/drm/card*/device/hwmon/hwmon*/temp1_input 2>/dev/null | head -1 | xargs dirname)
 
 if [ -z "$HWMON_PATH" ]; then
-    echo "Error: Could not find hwmon path"
+    echo "Error: Could not find AMD GPU hwmon path"
     exit 1
 fi
 
-# Read current SCLK (convert Hz to MHz)
-SCLK_HZ=$(cat ${HWMON_PATH}/freq1_input 2>/dev/null || echo "0")
-SCLK_MHZ=$((SCLK_HZ / 1000000))
+DEVICE_PATH=$(dirname $(dirname $HWMON_PATH))
 
-# Read MCLK from pp_dpm_mclk (get active state)
-MCLK=$(grep '\*' ${GPU_PATH}/pp_dpm_mclk | awk '{print $2}')
+# Read GPU metrics
+read_value() {
+    local file="$1"
+    if [ -f "$HWMON_PATH/$file" ]; then
+        cat "$HWMON_PATH/$file" 2>/dev/null
+    else
+        echo "N/A"
+    fi
+}
 
-# Read temperature (convert mC to C)
-TEMP_MC=$(cat ${HWMON_PATH}/temp1_input 2>/dev/null || echo "0")
-TEMP_C=$(echo "scale=1; ${TEMP_MC}/1000" | bc)
-
-# Read power (convert uW to W)
-POWER_UW=$(cat ${HWMON_PATH}/power1_average 2>/dev/null || echo "0")
-POWER_W=$(echo "scale=2; ${POWER_UW}/1000000" | bc)
-
-# Read GPU utilization
-GPU_BUSY=$(cat ${GPU_PATH}/gpu_busy_percent 2>/dev/null || echo "N/A")
-
-# Read VRAM usage
-VRAM_USED=$(cat ${GPU_PATH}/mem_info_vram_used 2>/dev/null || echo "0")
-VRAM_TOTAL=$(cat ${GPU_PATH}/mem_info_vram_total 2>/dev/null || echo "1")
-VRAM_PCT=$(echo "scale=0; (${VRAM_USED}*100)/${VRAM_TOTAL}" | bc)
-
-# Read performance level
-PERF_LEVEL=$(cat ${GPU_PATH}/power_dpm_force_performance_level 2>/dev/null)
-
-# Display
-echo "======================================== Strix Halo Monitor ========================================"
-echo "GPU: AMD Radeon Graphics (gfx1151 - Strix Halo)"
-echo "======================================================================================================="
-printf "%-10s %-12s %-10s %-10s %-10s %-10s %-10s\n" "Temp" "Power" "SCLK" "MCLK" "GPU%" "VRAM%" "Perf"
-printf "%-10s %-12s %-10s %-10s %-10s %-10s %-10s\n" "${TEMP_C}°C" "${POWER_W}W" "${SCLK_MHZ}MHz" "${MCLK}" "${GPU_BUSY}%" "${VRAM_PCT}%" "${PERF_LEVEL}"
-echo "======================================================================================================="
-
-# Show detailed SCLK/MCLK states if requested
-if [ "$1" = "-v" ] || [ "$1" = "--verbose" ]; then
-    echo ""
-    echo "SCLK States:"
-    cat ${GPU_PATH}/pp_dpm_sclk
-    echo ""
-    echo "MCLK States:"
-    cat ${GPU_PATH}/pp_dpm_mclk
+# Temperature (convert from millidegrees to degrees)
+temp=$(read_value "temp1_input")
+if [ "$temp" != "N/A" ]; then
+    temp=$((temp / 1000))
 fi
+
+# Power (convert from microwatts to watts)
+power=$(read_value "power1_average")
+if [ "$power" != "N/A" ]; then
+    power=$(awk "BEGIN {printf \"%.2f\", $power / 1000000}")
+fi
+
+# SCLK (GPU clock in MHz)
+sclk=$(read_value "freq1_input")
+if [ "$sclk" != "N/A" ]; then
+    sclk=$((sclk / 1000000))
+fi
+
+# MCLK (Memory clock from pp_dpm_mclk)
+if [ -f "$DEVICE_PATH/pp_dpm_mclk" ]; then
+    # Try to get the active state (marked with *)
+    mclk=$(grep '\*' "$DEVICE_PATH/pp_dpm_mclk" 2>/dev/null | awk '{print $2}' | sed 's/Mhz//')
+    # If no active state, get the last/highest value
+    if [ -z "$mclk" ]; then
+        mclk=$(tail -1 "$DEVICE_PATH/pp_dpm_mclk" | awk '{print $2}' | sed 's/Mhz//')
+    fi
+else
+    mclk="N/A"
+fi
+
+# GPU utilization percentage
+gpu_busy=$(read_value "device/gpu_busy_percent")
+
+# VRAM usage (convert from bytes to MiB)
+vram_used=$(read_value "device/mem_info_vram_used")
+vram_total=$(read_value "device/mem_info_vram_total")
+if [ "$vram_used" != "N/A" ] && [ "$vram_total" != "N/A" ]; then
+    vram_used_mib=$((vram_used / 1048576))
+    vram_total_mib=$((vram_total / 1048576))
+    vram_percent=$(awk "BEGIN {printf \"%.1f\", ($vram_used / $vram_total) * 100}")
+else
+    vram_used_mib="N/A"
+    vram_total_mib="N/A"
+    vram_percent="N/A"
+fi
+
+# Performance level
+perf_level=$(read_value "device/power_dpm_force_performance_level")
+
+# Print output
+echo "=========================="
+echo "AMD Strix Halo GPU Monitor"
+echo "=========================="
+echo "Temperature:    ${temp}°C"
+echo "Power:          ${power}W"
+echo "SCLK (GPU):     ${sclk} MHz"
+echo "MCLK (Memory):  ${mclk} MHz"
+echo "GPU Busy:       ${gpu_busy}%"
+echo "VRAM Used:      ${vram_used_mib} / ${vram_total_mib} MiB (${vram_percent}%)"
+echo "Perf Level:     ${perf_level}"
+echo "=========================="
+EOF
